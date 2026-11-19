@@ -12,7 +12,7 @@
 // Test mode (any other species, any map): ArcDPS names the NPC (species -> agent id), its
 // character object is found in memory and its agent position is read.
 
-#include "ArenaModel.h"
+#include "ArenaOutline.h"
 #include "EchoSource.h"
 #include "GameMemory.h"
 
@@ -37,11 +37,6 @@ public:
 	/// Species to track. Ender's Echo by default; any NPC species for testing in open world.
 	void SetSpecies(uint32_t aSpecies) { mSpecies = aSpecies; }
 
-	/// File that remembers where the Echo spawns (learned from a confirmed first dash).
-	void SetSpawnFile(const std::string& aPath);
-	/// File that remembers the arena outline (learned from where dashes end).
-	void SetArenaFile(const std::string& aPath) { mArena.Load(aPath); }
-	int ArenaKnownDirections() const { return mArena.KnownBins(); }
 
 private:
 	static constexpr uint32_t SPECIES_ENDERS_ECHO_ID = 19628;
@@ -85,11 +80,6 @@ private:
 	double                   mFrozenSince = 0;     // worker: when the Echo started standing still
 	bool                     mReacquiring = false; // worker: mid-fight re-acquire (no spawn check)
 	double                   mLastCorrection = 0;  // worker: last "bigger dash elsewhere" check
-	std::string              mSpawnFile;
-	Vec3                     mSpawn;              // where the Echo's first dash starts
-	bool                     mHaveSpawn = false;
-	Vec3                     mFirstOrigin;        // origin of this fight's first dash
-	bool                     mFirstPending = false; // first dash not confirmed yet
 
 	// Render thread only.
 	struct Sample { double T; Vec3 P; };
@@ -100,8 +90,5 @@ private:
 	bool                     mHaveSmooth = false;
 	std::vector<Sample>      mFit;                // positions of the current dash (straight-line fit)
 	double                   mStillSince = 0;
-	ArenaModel               mArena;
-	bool                     mWasFrozen = true;
-	Vec3                     mDashStart;
 	const char*              mStatus = "Waiting for the Echo.";
 };

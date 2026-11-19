@@ -59,17 +59,6 @@ LiveEcho::~LiveEcho()
 
 // ------------------------------------------------------------------------------------ Dhuum mode
 
-void LiveEcho::SetSpawnFile(const std::string& aPath)
-{
-	mSpawnFile = aPath;
-	if (FILE* f = std::fopen(aPath.c_str(), "r"))
-	{
-		float x, y, z;
-		if (std::fscanf(f, "%f %f %f", &x, &y, &z) == 3) { mSpawn = { x, y, z }; mHaveSpawn = true; }
-		std::fclose(f);
-	}
-}
-
 void LiveEcho::ResetFight()
 {
 	{ std::lock_guard<std::mutex> l(mClusterMutex); mCluster.clear(); }
@@ -78,7 +67,6 @@ void LiveEcho::ResetFight()
 	mLost = false;
 	mFrozen = false;
 	mLastScan = 0;
-	mFirstPending = false;
 	mFrozenSince = 0;
 }
 
@@ -244,7 +232,15 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		// The next dash starts where the Echo stood (detected within ~0.5 s, so a few metres on).
 		if (aHaveAnchor && !aAwayFromAnchor && FlatDistance(cl.Origin(), aAnchor) > 8.0f) { continue; }
 		if (!aHaveAnchor && FlatDistance(cl.Center(), aPlayer) < 12.0f) { continue; }
-		if (!aHaveAnchor && !mReacquiring && mHaveSpawn && FlatDistance(cl.Origin(), mSpawn) > 10.0f) { continue; }
+		// The very first dash starts at the Echo's spawn (identical in every attempt): its line must
+		// run back through the spawn point. Rules out adds and messengers at the start.
+		if (!aHaveAnchor && !mReacquiring)
+		{
+			const Vec3 back = Flat(Vec3{ ArenaOutline::SPAWN_X, 0, ArenaOutline::SPAWN_Z } - cl.Center());
+			const float along = Dot(back, cl.Dir());           // negative: spawn lies behind
+			const float sideways = Length(back - cl.Dir() * along);
+			if (along > 2.0f || sideways > 3.0f) { continue; }
+		}
 		ok.push_back(cl);
 	}
 	if (ok.empty()) { return false; }
@@ -265,27 +261,6 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 	}
 	APIDefs->Log(LOGL_INFO, ADDON_NAME, line.c_str());
 	const Cluster& best = ok.front();
-
-	if (!aHaveAnchor)
-	{
-		// Remember where this first dash started; it is saved as the spawn once the next dash
-		// confirms that we were really following the Echo.
-		mFirstOrigin = best.Origin();
-		mFirstPending = true;
-	}
-	else if (mFirstPending)
-	{
-		mFirstPending = false;
-		if (!mHaveSpawn || FlatDistance(mSpawn, mFirstOrigin) > 3.0f)
-		{
-			mSpawn = mHaveSpawn ? (mSpawn + mFirstOrigin) * 0.5f : mFirstOrigin;
-			mHaveSpawn = true;
-			if (FILE* f = std::fopen(mSpawnFile.c_str(), "w")) { std::fprintf(f, "%f %f %f\n", mSpawn.x, mSpawn.y, mSpawn.z); std::fclose(f); }
-			char b[128];
-			std::snprintf(b, sizeof(b), "Learned the Echo's spawn at (%.1f, %.1f, %.1f).", mSpawn.x, mSpawn.y, mSpawn.z);
-			APIDefs->Log(LOGL_INFO, ADDON_NAME, b);
-		}
-	}
 
 	std::vector<Cand> members = best.Members;
 	if (members.size() > 48) { members.resize(48); }
@@ -379,8 +354,7 @@ void LiveEcho::WorkerLoop()
 					mReacquiring = false;
 					if (found)
 					{
-						mFirstPending = false;
-						mFrozenSince = 0;
+											mFrozenSince = 0;
 						APIDefs->Log(LOGL_INFO, ADDON_NAME, "Re-acquired the Echo (previous lock didn't continue).");
 					}
 				}
@@ -398,8 +372,7 @@ void LiveEcho::WorkerLoop()
 					mReacquiring = true;
 					FindEchoCluster(PlayerPos(), true, at, std::max<size_t>(20, cur * 3), true);
 					mReacquiring = false;
-					mFirstPending = false;
-				}
+								}
 			}
 		}
 	}
@@ -474,10 +447,6 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 		// Standing still (at a wall) for a moment: tell the worker to watch for the next dash.
 		if (!mHaveLastPos || FlatDistance(pos, mLastPos) > 0.02f) { mStillSince = t; }
 		mFrozen = t - mStillSince > 0.3;
-		// A dash just ended: learn the arena edge from where it stopped.
-		if (mFrozen && !mWasFrozen && FlatDistance(pos, mDashStart) > 10.0f) { mArena.AddStop(pos); }
-		if (!mFrozen && mWasFrozen) { mDashStart = pos; }
-		mWasFrozen = mFrozen;
 		{ std::lock_guard<std::mutex> l(mClusterMutex); mAnchor = pos; }
 		mLastPos = pos;
 		mHaveLastPos = true;
@@ -571,7 +540,7 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 	// Where the current dash ends: the learned arena edge along the direction of travel.
 	const float speed = Length(Flat(vel));
 	float tEnd;
-	if (EchoMode() && speed > 3.0f && mArena.Exit(mSmooth, Normalize(Flat(vel)), tEnd))
+	if (EchoMode() && speed > 3.0f && ArenaOutline::Exit(mSmooth, Normalize(Flat(vel)), tEnd))
 	{
 		s.HasPathEnd = true;
 		s.PathEnd = mSmooth + Normalize(Flat(vel)) * tEnd;

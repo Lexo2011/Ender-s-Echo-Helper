@@ -59,8 +59,6 @@ namespace
 		const GameMemory::Layout* lay = GameMemory::CurrentLayout(MumbleLink->Context.BuildID);
 		const GameMemory::Layout none{};
 		Live = std::make_unique<LiveEcho>(lay ? *lay : none);
-		Live->SetSpawnFile(AddonFile("echo_spawn.txt"));
-		Live->SetArenaFile(AddonFile("echo_arena.txt"));
 	}
 
 	Vec3 ToVec3(const Vector3& v) { return { v.X, v.Y, v.Z }; }
@@ -204,7 +202,6 @@ namespace
 			changed |= ImGui::SliderFloat("##paththick", &Config.PathThickness, 1.0f, 10.0f, "%.0f px");
 			ImGui::SameLine();
 			ColorRow("Path colour", Config.ColPath, changed);
-			if (Live) { ImGui::TextDisabled("Arena edge learned in %d of 36 directions (the path is 50 m long until then).", Live->ArenaKnownDirections()); }
 		}
 
 		ImGui::Separator();

@@ -17,7 +17,7 @@ set(IMGUI_DIR ${CMAKE_SOURCE_DIR}/ext/imgui)
 
 set(SOURCES
 	src/entry.cpp
-	src/ArenaModel.h
+	src/ArenaOutline.h
 	src/ArcAgents.cpp
 	src/ArcAgents.h
 	src/GameMemory.cpp
