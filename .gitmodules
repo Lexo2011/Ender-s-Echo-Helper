@@ -1,0 +1,9 @@
+[submodule "ext/imgui"]
+	path = ext/imgui
+	url = https://github.com/RaidcoreGG/imgui
+[submodule "ext/mumble"]
+	path = ext/mumble
+	url = https://github.com/RaidcoreGG/RCGG-lib-mumble-api
+[submodule "ext/nexus"]
+	path = ext/nexus
+	url = https://github.com/RaidcoreGG/RCGG-lib-nexus-api
