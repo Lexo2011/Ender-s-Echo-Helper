@@ -37,9 +37,10 @@ public:
 	{
 		const float d = FlatDistance(aPos, Center);
 		if (d < 30.0f || d > 120.0f) { return; } // only real wall hits (the arena is ~45 m across from the middle)
+		// Keep the furthest stop per direction: the arena isn't round and the edge varies within a
+		// direction, so erring on the long side is safer than ending the path short.
 		const int b = Bin(aPos);
-		const int n = mCount[b] < 20 ? mCount[b] : 20; // running average over the last ~20
-		mDist[b] = (mDist[b] * n + d) / (n + 1);
+		if (d > mDist[b]) { mDist[b] = d; }
 		mCount[b]++;
 		Save();
 	}
@@ -82,7 +83,7 @@ private:
 				while (mCount[(b - sl + BINS) % BINS] == 0 && sl < BINS) { sl++; }
 				while (mCount[(b + sr) % BINS] == 0 && sr < BINS) { sr++; }
 				const float dl = mDist[(b - sl + BINS) % BINS], dr = mDist[(b + sr) % BINS];
-				aOut = (dl * sr + dr * sl) / (float)(sl + sr);
+				aOut = dl > dr ? dl : dr; // the larger neighbour: rather too long than too short
 				return true;
 			}
 		}

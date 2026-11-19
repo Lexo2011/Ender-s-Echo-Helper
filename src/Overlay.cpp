@@ -42,17 +42,9 @@ ThreatInfo Evaluate(const Settings& s, const Vec3& aPlayer, const EchoState& aEc
 		return t;
 	}
 
-	// Beyond the end of the dash (behind its wall) is safe.
-	if (aEcho.HasPathEnd)
-	{
-		const float pathLen = FlatDistance(aEcho.PathEnd, aEcho.Position);
-		if (along > pathLen + s.DangerHalfWidth)
-		{
-			t.Level = Threat::Safe;
-			t.PathDistance = FlatDistance(aPlayer, aEcho.PathEnd);
-			return t;
-		}
-	}
+	// The predicted end of the dash is NOT used here: if it is too short, standing in the path
+	// near the wall would look safe. The player is always inside the arena, so the whole line
+	// ahead of the Echo counts.
 
 	t.PathDistance = Length(toPlayer - dir * along);
 	t.TimeToReach  = along / speed;
@@ -93,7 +85,15 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 	{
 		const Vec3 start = Vec3{ aEcho.Position.x, aPlayer.y, aEcho.Position.z };
 		const Vec3 dirP  = Normalize(vel);
-		const float len  = aEcho.HasPathEnd ? FlatDistance(aEcho.PathEnd, aEcho.Position) : 50.0f;
+		float len = aEcho.HasPathEnd ? FlatDistance(aEcho.PathEnd, aEcho.Position) : 50.0f;
+		// Never draw the path shorter than where the player stands in it: the player is inside
+		// the arena, so the dash certainly reaches that far.
+		{
+			const Vec3 toP = Flat(aPlayer - aEcho.Position);
+			const float alongP = Dot(toP, dirP);
+			const float sideP = Length(toP - dirP * alongP);
+			if (alongP > 0 && sideP < s.WarnHalfWidth) { len = std::max(len, alongP + 3.0f); }
+		}
 		const ImU32 pcol = ImGui::ColorConvertFloat4ToU32(ImVec4(s.ColPath[0], s.ColPath[1], s.ColPath[2], s.ColPath[3]));
 		const Vec3 side = Vec3{ dirP.z, 0, -dirP.x };
 		auto withAlpha = [](const float* c, float a) { return ImGui::ColorConvertFloat4ToU32(ImVec4(c[0], c[1], c[2], c[3] * a)); };
