@@ -17,6 +17,7 @@
 #include "GameMemory.h"
 
 #include <atomic>
+#include <future>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -47,7 +48,11 @@ private:
 
 	// Dhuum mode
 	void ScanArena(const Vec3& aCenter, bool aKeepTracking);
+	std::vector<Cand> DoScan(const Vec3& aCenter, double& aSeconds);
 	bool FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3& aAnchor, size_t aMinSize, bool aAwayFromAnchor);
+	static void ReadAll(const std::vector<Cand>& aIn, std::vector<Vec3>& aPos, std::vector<double>& aTime, std::vector<char>& aOk);
+	void BuildStanding(const Vec3& aAnchor);
+	bool WatchStanding();
 	void ResetFight();
 
 	// Test mode
@@ -80,6 +85,15 @@ private:
 	double                   mFrozenSince = 0;     // worker: when the Echo started standing still
 	bool                     mReacquiring = false; // worker: mid-fight re-acquire (no spawn check)
 	double                   mLastCorrection = 0;  // worker: last "bigger dash elsewhere" check
+
+	// Worker: values sitting where the Echo stands at a wall. They start moving the moment the next
+	// dash begins, so watching only them (fast) picks the dash up within ~0.1-0.2 s.
+	std::vector<Cand>        mStanding;
+	std::vector<Vec3>        mStandRef, mStandPrev;
+	std::vector<double>      mStandPrevT;
+	Vec3                     mStandingAt;
+	double                   mLastSlowCheck = 0;
+	std::future<std::vector<Cand>> mScanJob;      // background rescan while the Echo stands at a wall
 
 	// Render thread only.
 	struct Sample { double T; Vec3 P; };

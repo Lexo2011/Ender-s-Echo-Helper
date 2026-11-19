@@ -55,6 +55,7 @@ LiveEcho::~LiveEcho()
 {
 	mStop = true;
 	if (mWorker.joinable()) { mWorker.join(); }
+	if (mScanJob.valid()) { mScanJob.wait(); }
 }
 
 // ------------------------------------------------------------------------------------ Dhuum mode
@@ -68,12 +69,14 @@ void LiveEcho::ResetFight()
 	mFrozen = false;
 	mLastScan = 0;
 	mFrozenSince = 0;
+	mStanding.clear();
+	if (mScanJob.valid()) { mScanJob.wait(); mScanJob = {}; }
 }
 
 /// Every position-like value within 70 m of the centre at floor height, using all CPU cores.
-void LiveEcho::ScanArena(const Vec3& c, bool aKeepTracking)
+/// Every position-like value within 70 m of the centre at floor height, using all CPU cores.
+std::vector<LiveEcho::Cand> LiveEcho::DoScan(const Vec3& c, double& aSeconds)
 {
-	if (!aKeepTracking) { mStage = 1; }
 	const double t0 = Now();
 	const auto regions = GameMemory::ScannableRegions();
 	const unsigned threads = std::max(2u, std::min(8u, std::thread::hardware_concurrency()));
@@ -114,42 +117,120 @@ void LiveEcho::ScanArena(const Vec3& c, bool aKeepTracking)
 		});
 	}
 	for (auto& t : pool) { t.join(); }
+
+	std::vector<Cand> all;
+	if (mStop || !mInFight) { return all; }
+	for (auto& p : parts) { all.insert(all.end(), p.begin(), p.end()); }
+	std::sort(all.begin(), all.end(), [](const Cand& a, const Cand& b) { return a.Addr < b.Addr; });
+	aSeconds = Now() - t0;
+	return all;
+}
+
+void LiveEcho::ScanArena(const Vec3& c, bool aKeepTracking)
+{
+	if (!aKeepTracking) { mStage = 1; }
+	double took = 0;
+	std::vector<Cand> found = DoScan(c, took);
 	mLastScan = Now();
 	if (mStop || !mInFight) { if (!aKeepTracking) { mStage = 0; } return; }
-
-	mCands.clear();
-	for (auto& p : parts) { mCands.insert(mCands.end(), p.begin(), p.end()); }
-	std::sort(mCands.begin(), mCands.end(), [](const Cand& a, const Cand& b) { return a.Addr < b.Addr; });
+	mCands = std::move(found);
 	if (!aKeepTracking) { mStage = 2; }
 
 	char b[160];
-	std::snprintf(b, sizeof(b), "Arena scan: %zu values in %.1f s (%u threads), %.1f s after the pull.",
-		mCands.size(), Now() - t0, threads, Now() - mFightStart);
+	std::snprintf(b, sizeof(b), "Arena scan: %zu values in %.1f s, %.1f s after the pull.", mCands.size(), took, Now() - mFightStart);
 	APIDefs->Log(LOGL_INFO, ADDON_NAME, b);
+}
+
+/// Reads all candidates block-wise (they must be sorted by address).
+void LiveEcho::ReadAll(const std::vector<Cand>& in, std::vector<Vec3>& pos, std::vector<double>& tm, std::vector<char>& ok)
+{
+	pos.assign(in.size(), Vec3{}); tm.assign(in.size(), 0); ok.assign(in.size(), 0);
+	std::vector<uint8_t> buf(0x10000 + 16);
+	size_t i = 0;
+	while (i < in.size())
+	{
+		const uintptr_t start = in[i].Addr;
+		size_t j = i;
+		while (j < in.size() && in[j].Addr + 12 - start <= 0x10000) { j++; }
+		const bool got = GameMemory::Read(start, buf.data(), in[j - 1].Addr + 12 - start);
+		const double t = Now();
+		for (size_t k = i; k < j; k++)
+		{
+			float f[3];
+			if (got) { memcpy(f, buf.data() + (in[k].Addr - start), 12); }
+			else if (!GameMemory::Read(in[k].Addr, f, 12)) { continue; }
+			pos[k] = Decode(f, in[k].Enc); tm[k] = t; ok[k] = 1;
+		}
+		i = j;
+	}
+}
+
+/// Picks the values that currently sit where the Echo stands.
+void LiveEcho::BuildStanding(const Vec3& aAnchor)
+{
+	std::vector<Vec3> p; std::vector<double> t; std::vector<char> ok;
+	ReadAll(mCands, p, t, ok);
+	mStanding.clear(); mStandRef.clear();
+	for (size_t i = 0; i < mCands.size(); i++)
+	{
+		if (!ok[i] || FlatDistance(p[i], aAnchor) > 1.5f || std::fabs(p[i].y - aAnchor.y) > 2.5f) { continue; }
+		mStanding.push_back(mCands[i]);
+		mStandRef.push_back(p[i]);
+		if (mStanding.size() >= 4000) { break; }
+	}
+	mStandPrev = mStandRef;
+	mStandPrevT.assign(mStanding.size(), Now());
+	mStandingAt = aAnchor;
+}
+
+/// Fast check of the standing values: has a group of them started dashing (Echo speed, one
+/// direction, away from the wall)? Then follow them.
+bool LiveEcho::WatchStanding()
+{
+	if (mStanding.empty()) { return false; }
+	std::vector<Vec3> p; std::vector<double> t; std::vector<char> ok;
+	ReadAll(mStanding, p, t, ok);
+
+	std::vector<size_t> movers;
+	Vec3 dirSum;
+	for (size_t i = 0; i < mStanding.size(); i++)
+	{
+		if (!ok[i]) { continue; }
+		const double dt = t[i] - mStandPrevT[i];
+		const float away = FlatDistance(p[i], mStandRef[i]);
+		const float v = dt > 0.02 ? FlatDistance(p[i], mStandPrev[i]) / (float)dt : 0.0f;
+		mStandPrev[i] = p[i];
+		mStandPrevT[i] = t[i];
+		if (away < 0.6f || away > 6.0f || v < 8.0f || v > 13.0f || std::fabs(p[i].y - mStandRef[i].y) > 1.5f) { continue; }
+		movers.push_back(i);
+		dirSum = dirSum + Normalize(Flat(p[i] - mStandRef[i]));
+	}
+	if (movers.size() < 3) { return false; }
+
+	// One direction: keep the movers that agree with the common direction.
+	const Vec3 dir = Normalize(dirSum);
+	std::vector<Cand> group;
+	for (size_t i : movers)
+	{
+		if (Dot(Normalize(Flat(p[i] - mStandRef[i])), dir) > 0.95f) { group.push_back(mStanding[i]); }
+	}
+	if (group.size() < 3) { return false; }
+	if (group.size() > 48) { group.resize(48); }
+
+	{ std::lock_guard<std::mutex> l(mClusterMutex); mCluster = std::move(group); }
+	mLost = false;
+	mFrozen = false;
+	char b[128];
+	std::snprintf(b, sizeof(b), "Next dash picked up from %zu standing values (%zu moving).", mStanding.size(), movers.size());
+	APIDefs->Log(LOGL_INFO, ADDON_NAME, b);
+	mStanding.clear();
+	return true;
 }
 
 bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3& aAnchor, size_t aMinSize, bool aAwayFromAnchor)
 {
 	auto readAll = [](const std::vector<Cand>& in, std::vector<Vec3>& pos, std::vector<double>& tm, std::vector<char>& ok) {
-		pos.assign(in.size(), Vec3{}); tm.assign(in.size(), 0); ok.assign(in.size(), 0);
-		std::vector<uint8_t> buf(0x10000 + 16);
-		size_t i = 0;
-		while (i < in.size())
-		{
-			const uintptr_t start = in[i].Addr;
-			size_t j = i;
-			while (j < in.size() && in[j].Addr + 12 - start <= 0x10000) { j++; }
-			const bool got = GameMemory::Read(start, buf.data(), in[j - 1].Addr + 12 - start);
-			const double t = Now();
-			for (size_t k = i; k < j; k++)
-			{
-				float f[3];
-				if (got) { memcpy(f, buf.data() + (in[k].Addr - start), 12); }
-				else if (!GameMemory::Read(in[k].Addr, f, 12)) { continue; }
-				pos[k] = Decode(f, in[k].Enc); tm[k] = t; ok[k] = 1;
-			}
-			i = j;
-		}
+		ReadAll(in, pos, tm, ok);
 	};
 
 	std::vector<Vec3> p1, p2, p3; std::vector<double> t1, t2, t3; std::vector<char> o1, o2, o3;
@@ -305,7 +386,8 @@ void LiveEcho::WorkerLoop()
 {
 	while (!mStop)
 	{
-		std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		// Fast while watching the values where the Echo stands, otherwise relaxed.
+		std::this_thread::sleep_for(std::chrono::milliseconds(mStage == 3 && mFrozen && !mStanding.empty() ? 15 : 50));
 		const double now = Now();
 
 		if (!EchoMode())
@@ -338,13 +420,42 @@ void LiveEcho::WorkerLoop()
 			if (mLost) { mStage = 2; continue; }
 			if (mFrozen)
 			{
-				if (mFrozenSince == 0) { mFrozenSince = now; }
-				// The Echo stands at a wall: refresh the scan (the next dash may use new memory) and
-				// watch for a dash that starts right here.
-				if (now - mLastScan > 1.5) { ScanArena(PlayerPos(), true); }
 				Vec3 anchor;
 				{ std::lock_guard<std::mutex> l(mClusterMutex); anchor = mAnchor; }
-				if (FindEchoCluster(PlayerPos(), true, anchor, MIN_ECHO_VALUES, false)) { mFrozenSince = 0; }
+				if (mFrozenSince == 0)
+				{
+					// Just stopped at a wall: watch the values sitting where the Echo stands right away,
+					// and refresh the scan in the background (the next dash may use new memory).
+					mFrozenSince = now;
+					BuildStanding(anchor);
+					if (!mScanJob.valid())
+					{
+						const Vec3 c = PlayerPos();
+						mScanJob = std::async(std::launch::async, [this, c]() { double s; return DoScan(c, s); });
+					}
+				}
+				else if (FlatDistance(anchor, mStandingAt) > 1.5f)
+				{
+					BuildStanding(anchor);
+				}
+
+				// Background scan finished: take its values and pick the standing ones again.
+				if (mScanJob.valid() && mScanJob.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+				{
+					std::vector<Cand> fresh = mScanJob.get();
+					mLastScan = Now();
+					if (!fresh.empty()) { mCands = std::move(fresh); BuildStanding(anchor); }
+				}
+
+				// Fast path: the standing values start moving the moment the dash begins.
+				if (WatchStanding()) { mFrozenSince = 0; continue; }
+
+				// Slow path (backup): search all values for a dash starting here. Only when the fast
+				// path has nothing to watch, or the Echo has been standing unusually long.
+				const bool fastUsable = mStanding.size() >= 3 && now - mFrozenSince < 2.5;
+				if (fastUsable || mScanJob.valid() || now - mLastSlowCheck < 0.6) { continue; }
+				mLastSlowCheck = now;
+				if (FindEchoCluster(PlayerPos(), true, anchor, MIN_ECHO_VALUES, false)) { mFrozenSince = 0; mStanding.clear(); }
 				else if (Now() - mFrozenSince > 2.0)
 				{
 					// The Echo never stands that long: we were following something else. Re-acquire
@@ -446,7 +557,7 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 
 		// Standing still (at a wall) for a moment: tell the worker to watch for the next dash.
 		if (!mHaveLastPos || FlatDistance(pos, mLastPos) > 0.02f) { mStillSince = t; }
-		mFrozen = t - mStillSince > 0.3;
+		mFrozen = t - mStillSince > 0.15; // ~1.5 m of travel during a dash
 		{ std::lock_guard<std::mutex> l(mClusterMutex); mAnchor = pos; }
 		mLastPos = pos;
 		mHaveLastPos = true;
