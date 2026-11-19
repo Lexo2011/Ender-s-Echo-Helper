@@ -48,6 +48,8 @@ if(ENDERSECHO_DEV)
 endif()
 
 add_library(EndersEcho SHARED ${SOURCES})
+# The community calls Ender's Echo "Kevin".
+set_target_properties(EndersEcho PROPERTIES OUTPUT_NAME "Kevin")
 
 target_include_directories(EndersEcho PRIVATE
 	${CMAKE_SOURCE_DIR}/src
