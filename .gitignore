@@ -1,2 +1,4 @@
 build/
+build-dev/
+dist/
 .vs/

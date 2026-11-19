@@ -1,7 +1,10 @@
 ///----------------------------------------------------------------------------------------------------
 /// Ender's Echo Helper - Nexus addon for the Dhuum CM encounter.
 /// Draws a circle around the player, coloured by how close the player is to Ender's Echo's
-/// running path, with an arrow pointing towards the Echo.
+/// running path, with an arrow pointing towards the Echo and its dash drawn on the floor.
+///
+/// Build with -DENDERSECHO_DEV=ON for the development tools (memory diagnostic, Echo hunt,
+/// test species, auto-mark). The default build is the version to share.
 ///----------------------------------------------------------------------------------------------------
 
 #include "Shared.h"
@@ -9,13 +12,15 @@
 #include "imgui.h"
 
 #include "ArcAgents.h"
-#include "Diagnostics.h"
-#include "EchoHunt.h"
 #include "GameMemory.h"
 #include "LiveEcho.h"
 #include "Overlay.h"
 #include "Settings.h"
 #include "SimulatedEcho.h"
+#if ENDERSECHO_DEV
+#include "Diagnostics.h"
+#include "EchoHunt.h"
+#endif
 
 #include <algorithm>
 #include <memory>
@@ -38,56 +43,53 @@ namespace
 	SimulatedEcho     Simulation;
 
 	/// Source used during the real fight: reads the Echo from game memory.
-	/// Created once the game build is known and has a mapped layout.
+	/// The Echo tracking itself doesn't depend on the game build; only the dev test mode does.
 	std::unique_ptr<LiveEcho> Live;
-	IEchoSource*      LiveSource = nullptr;
 	bool              LiveChecked = false;
-	EchoHunt          Hunt;
+
+	std::string AddonFile(const char* aName)
+	{
+		return std::string(APIDefs->Paths_GetAddonDirectory("EndersEcho")) + "/" + aName;
+	}
 
 	void EnsureLiveSource()
 	{
 		if (LiveChecked || !MumbleLink || MumbleLink->Context.BuildID == 0) { return; }
 		LiveChecked = true;
-		if (const GameMemory::Layout* lay = GameMemory::CurrentLayout(MumbleLink->Context.BuildID))
-		{
-			Live = std::make_unique<LiveEcho>(*lay);
-			Live->SetSpawnFile(std::string(APIDefs->Paths_GetAddonDirectory("EndersEcho")) + "/echo_spawn.txt");
-			Live->SetArenaFile(std::string(APIDefs->Paths_GetAddonDirectory("EndersEcho")) + "/echo_arena.txt");
-			LiveSource = Live.get();
-		}
-		else
-		{
-			APIDefs->Log(LOGL_WARNING, ADDON_NAME, "This game build isn't mapped: live tracking is off. Run the memory diagnostic.");
-		}
+		const GameMemory::Layout* lay = GameMemory::CurrentLayout(MumbleLink->Context.BuildID);
+		const GameMemory::Layout none{};
+		Live = std::make_unique<LiveEcho>(lay ? *lay : none);
+		Live->SetSpawnFile(AddonFile("echo_spawn.txt"));
+		Live->SetArenaFile(AddonFile("echo_arena.txt"));
 	}
+
+	Vec3 ToVec3(const Vector3& v) { return { v.X, v.Y, v.Z }; }
+
+	void SaveSettings() { if (!SettingsPath.empty()) { Config.Save(SettingsPath); } }
+
+#if ENDERSECHO_DEV
+	EchoHunt Hunt;
+	bool     ShowDiagnostics = false;
 
 	/// The Echo exists for a whole attempt, so it is marked once and the flag resets when it disappears.
 	/// Pressing the marker bind again on an already marked target would REMOVE the marker.
 	bool MarkedThisAttempt = false;
 
-	bool ShowDiagnostics = false;
-
-	Vec3 ToVec3(const Vector3& v) { return { v.X, v.Y, v.Z }; }
-
 	bool IsCommander() { return MumbleIdentity && MumbleIdentity->IsCommander; }
 
-	void PressCrossAgentMarker()
-	{
-		APIDefs->GameBinds_InvokeAsync(GB_SquadMarkerSetAgent8, 50);
-	}
+	void PressCrossAgentMarker() { APIDefs->GameBinds_InvokeAsync(GB_SquadMarkerSetAgent8, 50); }
 
 	void UpdateAutoMark(const EchoState& aEcho)
 	{
 		if (!aEcho.Valid) { MarkedThisAttempt = false; return; }
-		if (!Config.AutoMark || MarkedThisAttempt || !LiveSource) { return; }
+		if (!Config.AutoMark || MarkedThisAttempt || !Live) { return; }
 		if (Config.AutoMarkOnlyAsCommander && !IsCommander()) { return; }
 
-		if (LiveSource->CanMarkDirectly())
+		if (Live->CanMarkDirectly())
 		{
-			// No targeting needed: the game marks the Echo agent itself.
-			if (!LiveSource->MarkEchoDirectly()) { return; }
+			if (!Live->MarkEchoDirectly()) { return; }
 		}
-		else if (LiveSource->IsEchoTargeted())
+		else if (Live->IsEchoTargeted())
 		{
 			PressCrossAgentMarker();
 		}
@@ -95,12 +97,10 @@ namespace
 		{
 			return;
 		}
-
 		MarkedThisAttempt = true;
 		APIDefs->Log(LOGL_INFO, ADDON_NAME, "Marked Ender's Echo with the X marker.");
 	}
-
-	void SaveSettings() { if (!SettingsPath.empty()) { Config.Save(SettingsPath); } }
+#endif
 
 	void OnKeybind(const char* aIdentifier, bool aIsRelease)
 	{
@@ -111,12 +111,12 @@ namespace
 			if (Simulation.IsActive())
 			{
 				Simulation.Stop();
-				APIDefs->GUI_SendAlert("Ender's Echo simulation stopped");
+				APIDefs->GUI_SendAlert("Ender's Echo practice stopped");
 			}
 			else if (MumbleLink)
 			{
 				Simulation.Start(ToVec3(MumbleLink->AvatarPosition));
-				APIDefs->GUI_SendAlert("Ender's Echo simulation started");
+				APIDefs->GUI_SendAlert("Ender's Echo practice started");
 			}
 		}
 		else if (strcmp(aIdentifier, KB_TOGGLE) == 0)
@@ -131,12 +131,16 @@ namespace
 		if (!MumbleLink || !NexusLink || !NexusLink->IsGameplay) { return; }
 
 		const Vec3 player = ToVec3(MumbleLink->AvatarPosition);
+#if ENDERSECHO_DEV
 		Diagnostics::RenderWindow(&ShowDiagnostics, player);
 		if (Hunt.IsActive())
 		{
-			Hunt.Feed(player, MumbleLink->Context.IsInCombat != 0, MumbleLink->Context.MapID,
-			          GetTickCount64() / 1000.0);
+			Hunt.Feed(player, MumbleLink->Context.IsInCombat != 0, MumbleLink->Context.MapID, GetTickCount64() / 1000.0);
 		}
+		const bool testing = Config.TestSpecies > 0;
+#else
+		const bool testing = false;
+#endif
 
 		if (!Config.Enabled) { return; }
 		const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.25f);
@@ -154,11 +158,12 @@ namespace
 			EnsureLiveSource();
 			if (Live)
 			{
-				const bool testing = Config.TestSpecies > 0;
 				if (!testing && Config.OnlyInHallOfChains && MumbleLink->Context.MapID != MAP_HALL_OF_CHAINS) { return; }
 				Live->SetSpecies(testing ? (uint32_t)Config.TestSpecies : SPECIES_ENDERS_ECHO);
 				echo = Live->Update(player, dt);
+#if ENDERSECHO_DEV
 				if (!testing) { UpdateAutoMark(echo); }
+#endif
 			}
 		}
 
@@ -199,41 +204,7 @@ namespace
 			changed |= ImGui::SliderFloat("##paththick", &Config.PathThickness, 1.0f, 10.0f, "%.0f px");
 			ImGui::SameLine();
 			ColorRow("Path colour", Config.ColPath, changed);
-			if (Live) { ImGui::TextDisabled("Arena edge learned in %d of 36 directions (the line is 50 m until then).", Live->ArenaKnownDirections()); }
-		}
-
-		ImGui::Separator();
-		ImGui::Text("Squad marker");
-		changed |= ImGui::Checkbox("Auto-mark the Echo with X", &Config.AutoMark);
-		if (Config.AutoMark)
-		{
-			ImGui::Indent();
-			changed |= ImGui::Checkbox("Only while I am commander", &Config.AutoMarkOnlyAsCommander);
-			ImGui::TextDisabled("Marks the Echo once per attempt. Don't also mark it by hand:");
-			ImGui::TextDisabled("placing the same marker again removes it.");
-			const bool direct = LiveSource && LiveSource->CanMarkDirectly();
-			if (!LiveSource)
-			{
-				ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Inactive until live tracking of the Echo is implemented.");
-			}
-			else if (direct)
-			{
-				ImGui::TextDisabled("Marks directly, no need to target the Echo.");
-			}
-			else if (LiveSource->CanDetectTarget())
-			{
-				ImGui::TextDisabled("Marks the moment you target the Echo.");
-			}
-			if (!direct && !APIDefs->GameBinds_IsBound(GB_SquadMarkerSetAgent8))
-			{
-				ImGui::TextColored(ImVec4(1, 0.4f, 0.3f, 1),
-					"\"Set Agent Marker: Cross\" has no key. Bind it in game and in Nexus' game keybinds.");
-			}
-			if (ImGui::Button("Test: mark my current target with X"))
-			{
-				PressCrossAgentMarker();
-			}
-			ImGui::Unindent();
+			if (Live) { ImGui::TextDisabled("Arena edge learned in %d of 36 directions (the path is 50 m long until then).", Live->ArenaKnownDirections()); }
 		}
 
 		ImGui::Separator();
@@ -255,38 +226,39 @@ namespace
 		ColorRow("Echo waiting", Config.ColIdle, changed);
 
 		ImGui::Separator();
-		ImGui::Text("Testing");
-		if (ImGui::Button(Simulation.IsActive() ? "Stop simulation" : "Start simulation"))
+		if (ImGui::Button(Simulation.IsActive() ? "Stop practice" : "Practice (fake Echo)"))
 		{
 			OnKeybind(KB_TOGGLE_SIM, false);
 		}
 		ImGui::SameLine();
-		ImGui::TextDisabled("Spawns a fake Echo on a %.0fm arena around you.", Simulation.ArenaRadius);
-		if (Live)
+		ImGui::TextDisabled("A fake Echo dashes at you on a %.0f m arena. Keybind: ALT+SHIFT+E.", Simulation.ArenaRadius);
+		if (Live) { ImGui::Text("Live tracking: %s", Live->Status()); }
+
+#if ENDERSECHO_DEV
+		ImGui::Separator();
+		ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Developer tools");
+		changed |= ImGui::Checkbox("Auto-mark the Echo with X (not functional yet)", &Config.AutoMark);
+		if (Config.AutoMark)
 		{
-			ImGui::Text("Live tracking: %s", Live->Status());
-			bool hunt = Hunt.IsActive();
-			if (ImGui::Checkbox("Find the Echo's moving position (Dhuum)", &hunt))
-			{
-				const GameMemory::Layout* lay = GameMemory::CurrentLayout(MumbleLink ? MumbleLink->Context.BuildID : 0);
-				if (hunt && lay) { Hunt.Start(std::string(APIDefs->Paths_GetAddonDirectory("EndersEcho")) + "/echo_hunt.txt", *lay); }
-				else             { Hunt.Stop(); }
-			}
-			if (Hunt.IsActive())
-			{
-				ImGui::SameLine();
-				ImGui::TextDisabled("%s", Hunt.Status().c_str());
-			}
+			ImGui::Indent();
+			changed |= ImGui::Checkbox("Only while I am commander", &Config.AutoMarkOnlyAsCommander);
+			if (ImGui::Button("Test: mark my current target with X")) { PressCrossAgentMarker(); }
+			ImGui::Unindent();
 		}
-		else
+		bool hunt = Hunt.IsActive();
+		if (ImGui::Checkbox("Find the Echo's moving position (Dhuum)", &hunt))
 		{
-			ImGui::TextColored(ImVec4(1, 0.7f, 0.3f, 1), "Live tracking is off: this game build isn't mapped.");
+			const GameMemory::Layout* lay = GameMemory::CurrentLayout(MumbleLink ? MumbleLink->Context.BuildID : 0);
+			if (hunt && lay) { Hunt.Start(AddonFile("echo_hunt.txt"), *lay); }
+			else             { Hunt.Stop(); }
 		}
+		if (Hunt.IsActive()) { ImGui::SameLine(); ImGui::TextDisabled("%s", Hunt.Status().c_str()); }
 		ImGui::SetNextItemWidth(120);
 		changed |= ImGui::InputInt("Track this species instead (0 = Echo)", &Config.TestSpecies, 0);
 		if (Config.TestSpecies < 0) { Config.TestSpecies = 0; }
-		ImGui::TextDisabled("For testing in open world, e.g. Harathi Trampler = 5017. ArcDPS must see it first.");
+		ImGui::TextDisabled("Test mode needs a mapped game build and ArcDPS, e.g. Harathi Trampler = 5017.");
 		if (ImGui::Button("Open memory diagnostic")) { ShowDiagnostics = true; }
+#endif
 
 		if (changed) { SaveSettings(); }
 	}
@@ -306,9 +278,15 @@ namespace
 		CreateDirectoryA(dir.c_str(), nullptr);
 		SettingsPath = dir + "/settings.ini";
 		Config.Load(SettingsPath);
+#if !ENDERSECHO_DEV
+		Config.TestSpecies = 0; // dev-only settings stay off in the shared build
+		Config.AutoMark = false;
+#endif
 		GameMemory::Init();
 		ArcAgents::Init();
+#if ENDERSECHO_DEV
 		Diagnostics::Init(dir + "/diagnostic.txt");
+#endif
 
 		APIDefs->InputBinds_RegisterWithString(KB_TOGGLE_SIM, OnKeybind, "ALT+SHIFT+E");
 		APIDefs->InputBinds_RegisterWithString(KB_TOGGLE, OnKeybind, "(null)");
@@ -326,11 +304,12 @@ namespace
 		APIDefs->InputBinds_Deregister(KB_TOGGLE_SIM);
 		APIDefs->InputBinds_Deregister(KB_TOGGLE);
 		// Worker threads must finish before the DLL is unmapped.
-		LiveSource = nullptr;
 		Live.reset();
-		Hunt.Stop();
 		LiveChecked = false;
+#if ENDERSECHO_DEV
+		Hunt.Stop();
 		Diagnostics::Shutdown();
+#endif
 		ArcAgents::Shutdown();
 		SaveSettings();
 
@@ -347,14 +326,17 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	AddonDef.Signature        = (uint32_t)-0x4E9C1; // unique negative id for a non-Raidcore-hosted addon
 	AddonDef.APIVersion       = NEXUS_API_VERSION;
 	AddonDef.Name             = ADDON_NAME;
-	AddonDef.Version.Major    = 0;
-	AddonDef.Version.Minor    = 1;
+	AddonDef.Version.Major    = 1;
+	AddonDef.Version.Minor    = 0;
 	AddonDef.Version.Build    = 0;
 	AddonDef.Version.Revision = 0;
-	AddonDef.Author           = "Kevin";
-	AddonDef.Description      = "Dhuum CM: shows where Ender's Echo is and whether you stand in its path.";
+	AddonDef.Author           = "Lexo";
+	AddonDef.Description      = "Dhuum CM: shows where Ender's Echo is, its dash path, and whether you stand in it.";
 	AddonDef.Load             = AddonLoad;
 	AddonDef.Unload           = AddonUnload;
 	AddonDef.Flags            = AF_None;
+	// Nexus checks the repository's GitHub releases for new versions.
+	AddonDef.Provider         = UP_GitHub;
+	AddonDef.UpdateLink       = "https://github.com/Lexo2011/Ender-s-Echo-Helper";
 	return &AddonDef;
 }
