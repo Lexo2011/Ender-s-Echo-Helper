@@ -215,6 +215,7 @@ bool LiveEcho::WatchStanding()
 		if (Dot(Normalize(Flat(p[i] - mStandRef[i])), dir) > 0.95f) { group.push_back(mStanding[i]); }
 	}
 	if (group.size() < 3) { return false; }
+	mLockedSize = group.size();
 	if (group.size() > 48) { group.resize(48); }
 
 	{ std::lock_guard<std::mutex> l(mClusterMutex); mCluster = std::move(group); }
@@ -238,6 +239,7 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 	std::this_thread::sleep_for(std::chrono::milliseconds(150));
 	readAll(mCands, p2, t2, o2);
 
+	const Vec3 camera = MumbleLink ? Vec3{ MumbleLink->CameraPosition.X, MumbleLink->CameraPosition.Y, MumbleLink->CameraPosition.Z } : Vec3{ 1e9f, 0, 1e9f };
 	struct Mover { Cand C; Vec3 P0; Vec3 P; Vec3 Dir; double T; float V; };
 	std::vector<Mover> moving;
 	for (size_t i = 0; i < mCands.size(); i++)
@@ -249,6 +251,7 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		if (v < 7.0f || v > 14.0f || std::fabs(p2[i].y - p1[i].y) > 1.5f) { continue; }
 		const float dPlayer = FlatDistance(p2[i], aPlayer);
 		if (dPlayer < 3.0f || dPlayer > 75.0f) { continue; } // inside the arena, not you
+		if (FlatDistance(p2[i], camera) < 3.0f) { continue; } // the game camera follows you
 		moving.push_back({ mCands[i], p1[i], p2[i], Normalize(d), t2[i], v });
 	}
 	if (moving.empty()) { return false; }
@@ -308,8 +311,9 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		// The Echo's dash shows up as many values moving together (dozens to hundreds);
 		// messengers, adds and stray values only as a handful.
 		if (cl.Members.size() < aMinSize) { continue; }
-		// Correction: only something elsewhere (not what we are already following).
-		if (aAwayFromAnchor && FlatDistance(cl.Center(), aAnchor) < 5.0f) { continue; }
+		// Correction: only something clearly elsewhere (not the Echo we follow, measured a moment
+		// later) and not near the player or camera.
+		if (aAwayFromAnchor && (FlatDistance(cl.Center(), aAnchor) < 12.0f || FlatDistance(cl.Center(), aPlayer) < 8.0f)) { continue; }
 		// The next dash starts where the Echo stood (detected within ~0.5 s, so a few metres on).
 		if (aHaveAnchor && !aAwayFromAnchor && FlatDistance(cl.Origin(), aAnchor) > 8.0f) { continue; }
 		if (!aHaveAnchor && FlatDistance(cl.Center(), aPlayer) < 12.0f) { continue; }
@@ -343,6 +347,7 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 	APIDefs->Log(LOGL_INFO, ADDON_NAME, line.c_str());
 	const Cluster& best = ok.front();
 
+	mLockedSize = best.Members.size();
 	std::vector<Cand> members = best.Members;
 	if (members.size() > 48) { members.resize(48); }
 	{ std::lock_guard<std::mutex> l(mClusterMutex); mCluster = std::move(members); }
@@ -478,10 +483,10 @@ void LiveEcho::WorkerLoop()
 				if (now - mLastCorrection > 1.0)
 				{
 					mLastCorrection = now;
-					size_t cur; Vec3 at;
-					{ std::lock_guard<std::mutex> l(mClusterMutex); cur = mCluster.size(); at = mAnchor; }
+					Vec3 at;
+					{ std::lock_guard<std::mutex> l(mClusterMutex); at = mAnchor; }
 					mReacquiring = true;
-					FindEchoCluster(PlayerPos(), true, at, std::max<size_t>(20, cur * 3), true);
+					FindEchoCluster(PlayerPos(), true, at, std::max<size_t>(50, mLockedSize * 3), true);
 					mReacquiring = false;
 								}
 			}

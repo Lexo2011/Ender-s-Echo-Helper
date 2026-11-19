@@ -93,6 +93,7 @@ private:
 	std::vector<double>      mStandPrevT;
 	Vec3                     mStandingAt;
 	double                   mLastSlowCheck = 0;
+	size_t                   mLockedSize = 0;      // full size of the group we locked onto
 	std::future<std::vector<Cand>> mScanJob;      // background rescan while the Echo stands at a wall
 
 	// Render thread only.
