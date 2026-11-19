@@ -17,6 +17,10 @@ namespace ArenaOutline
 	constexpr float SPAWN_X = 439.48f;
 	constexpr float SPAWN_Z = 33.91f;
 
+	/// Height of the (flat) arena floor in MumbleLink metres: players' and the Echo's median height
+	/// in the logs. Players float up to ~206 m doing greens; the Echo stays at 157.9-159.7 m.
+	constexpr float FLOOR_Y = 157.86f;
+
 	constexpr Pt POINTS[] = {
 		{ 351.13f, 17.56f }, { 351.01f, 15.91f }, { 350.91f, 14.24f }, { 350.84f, 12.56f },
 		{ 350.69f, 10.85f }, { 350.50f, 9.11f }, { 350.53f, 7.37f }, { 351.12f, 5.76f },

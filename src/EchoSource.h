@@ -11,6 +11,8 @@ struct EchoState
 	Vec3 Velocity;         // metres / second; ~0 while it stands at a wall.
 	bool HasPathEnd = false;
 	Vec3 PathEnd;          // where the current dash ends (arena edge), when known
+	bool HasGround = false;
+	float GroundY = 0;     // floor height to draw the markings at (otherwise the player's height)
 };
 
 class IEchoSource

@@ -539,6 +539,8 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 			mFrozen = true;
 			s.Valid = true;
 			s.Position = mLastPos;
+			s.HasGround = true;
+			s.GroundY = ArenaOutline::FLOOR_Y;
 			mStatus = "Tracking the Echo (at the wall).";
 			return s;
 		}
@@ -652,6 +654,12 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 	s.Valid = true;
 	s.Position = mSmooth;
 	s.Velocity = vel;
+	if (EchoMode())
+	{
+		// Draw on the arena floor, whatever height the player or the tracked values are at.
+		s.HasGround = true;
+		s.GroundY = ArenaOutline::FLOOR_Y;
+	}
 
 	// Where the current dash ends: the learned arena edge along the direction of travel.
 	const float speed = Length(Flat(vel));

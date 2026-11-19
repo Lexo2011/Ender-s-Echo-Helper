@@ -99,9 +99,9 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 	ImDrawList* dl  = ImGui::GetBackgroundDrawList();
 	ImU32       col = ColorFor(s, aThreat.Level);
 
-	// Everything on the ground is drawn at the floor height, taken from the Echo (always on the
-	// floor), so it stays on the ground while the player floats up (e.g. doing a green).
-	const float groundY = std::isfinite(aEcho.Position.y) && std::fabs(aEcho.Position.y - aPlayer.y) < 40.0f ? aEcho.Position.y : aPlayer.y;
+	// Everything on the ground is drawn at the arena floor height (live tracking), so it stays on
+	// the ground while the player floats up (e.g. doing a green). Practice mode: the player's height.
+	const float groundY = aEcho.HasGround ? aEcho.GroundY : aPlayer.y;
 	const Vec3  feet{ aPlayer.x, groundY, aPlayer.z };
 
 	// The Echo's path: a line on the ground from the Echo to where the dash ends (or 50 m).
