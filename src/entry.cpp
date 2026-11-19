@@ -189,7 +189,19 @@ namespace
 		changed |= ImGui::Checkbox("Enabled", &Config.Enabled);
 		changed |= ImGui::Checkbox("Only in Hall of Chains", &Config.OnlyInHallOfChains);
 		changed |= ImGui::Checkbox("Show time until hit (when red)", &Config.ShowStatusText);
+		if (Config.ShowStatusText)
+		{
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(140);
+			changed |= ImGui::SliderFloat("##timersize", &Config.TimerTextSize, 12.0f, 96.0f, "size %.0f px");
+		}
 		changed |= ImGui::Checkbox("Show distance (m) next to the arrow", &Config.ShowArrowDistance);
+		if (Config.ShowArrowDistance)
+		{
+			ImGui::SameLine();
+			ImGui::SetNextItemWidth(140);
+			changed |= ImGui::SliderFloat("##distsize", &Config.DistanceTextSize, 12.0f, 64.0f, "size %.0f px");
+		}
 		changed |= ImGui::Checkbox("Show the Echo's path", &Config.ShowPath);
 		if (Config.ShowPath)
 		{
@@ -325,7 +337,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	AddonDef.Name             = ADDON_NAME;
 	AddonDef.Version.Major    = 1;
 	AddonDef.Version.Minor    = 0;
-	AddonDef.Version.Build    = 1;
+	AddonDef.Version.Build    = 2;
 	AddonDef.Version.Revision = 0;
 	AddonDef.Author           = "Lexo";
 	AddonDef.Description      = "Dhuum CM: shows where Ender's Echo is, its dash path, and whether you stand in it.";

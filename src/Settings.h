@@ -8,6 +8,8 @@ struct Settings
 	bool  OnlyInHallOfChains = true;  // hide outside map 1264 (simulation ignores this)
 	bool  ShowStatusText    = true;
 	bool  ShowArrowDistance = true;   // "12 m" next to the arrow tip
+	float TimerTextSize     = 32.0f;  // pixels, time until hit
+	float DistanceTextSize  = 20.0f;  // pixels, distance at the arrow tip
 	bool  ShowPath          = true;   // the Echo's dash drawn on the ground
 	int   PathStyle         = 1;      // 0 = line, 1 = band on the floor (danger/warning width)
 	float PathThickness     = 3.0f;   // pixels

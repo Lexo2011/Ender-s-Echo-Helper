@@ -15,6 +15,8 @@ namespace
 		f("only_in_hall_of_chains", s.OnlyInHallOfChains);
 		f("show_status_text", s.ShowStatusText);
 		f("show_arrow_distance", s.ShowArrowDistance);
+		f("timer_text_size", s.TimerTextSize);
+		f("distance_text_size", s.DistanceTextSize);
 		f("show_path", s.ShowPath);
 		f("path_style", s.PathStyle);
 		f("path_thickness", s.PathThickness);

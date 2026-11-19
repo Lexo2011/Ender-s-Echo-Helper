@@ -1,8 +1,10 @@
 #include "Overlay.h"
 
 #include "imgui.h"
+#include "Shared.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 
@@ -69,6 +71,24 @@ namespace
 		}
 		return ImGui::ColorConvertFloat4ToU32(ImVec4(c[0], c[1], c[2], c[3]));
 	}
+
+	/// Text with a dark outline, at a chosen pixel size. Uses Nexus' large font so it stays sharp.
+	void DrawLabel(ImDrawList* dl, float aSize, ImVec2 aAnchor, bool aCenterY, ImU32 aCol, const char* aText)
+	{
+		ImFont* font = (NexusLink && NexusLink->FontBig) ? (ImFont*)NexusLink->FontBig : ImGui::GetFont();
+		const ImVec2 size = font->CalcTextSizeA(aSize, FLT_MAX, 0.0f, aText);
+		const ImVec2 pos(aAnchor.x - size.x * 0.5f, aCenterY ? aAnchor.y - size.y * 0.5f : aAnchor.y);
+		const float o = aSize > 24.0f ? 2.0f : 1.0f;
+		const ImU32 shadow = IM_COL32(0, 0, 0, 220);
+		for (int dx = -1; dx <= 1; dx++)
+		{
+			for (int dy = -1; dy <= 1; dy++)
+			{
+				if (dx || dy) { dl->AddText(font, aSize, ImVec2(pos.x + dx * o, pos.y + dy * o), shadow, aText); }
+			}
+		}
+		dl->AddText(font, aSize, pos, aCol, aText);
+	}
 }
 
 void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
@@ -79,11 +99,16 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 	ImDrawList* dl  = ImGui::GetBackgroundDrawList();
 	ImU32       col = ColorFor(s, aThreat.Level);
 
+	// Everything on the ground is drawn at the floor height, taken from the Echo (always on the
+	// floor), so it stays on the ground while the player floats up (e.g. doing a green).
+	const float groundY = std::isfinite(aEcho.Position.y) && std::fabs(aEcho.Position.y - aPlayer.y) < 40.0f ? aEcho.Position.y : aPlayer.y;
+	const Vec3  feet{ aPlayer.x, groundY, aPlayer.z };
+
 	// The Echo's path: a line on the ground from the Echo to where the dash ends (or 50 m).
 	const Vec3 vel = Flat(aEcho.Velocity);
 	if (s.ShowPath && Length(vel) > s.MovingThreshold)
 	{
-		const Vec3 start = Vec3{ aEcho.Position.x, aPlayer.y, aEcho.Position.z };
+		const Vec3 start = Vec3{ aEcho.Position.x, groundY, aEcho.Position.z };
 		const Vec3 dirP  = Normalize(vel);
 		float len = aEcho.HasPathEnd ? FlatDistance(aEcho.PathEnd, aEcho.Position) : 50.0f;
 		// Never draw the path shorter than where the player stands in it: the player is inside
@@ -149,7 +174,7 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 	for (int i = 0; i <= SEGMENTS; i++)
 	{
 		float a = 6.2831853f * i / SEGMENTS;
-		Vec3  p = aPlayer + Vec3{ std::cos(a), 0, std::sin(a) } * s.CircleRadius;
+		Vec3  p = feet + Vec3{ std::cos(a), 0, std::sin(a) } * s.CircleRadius;
 		ImVec2 cur;
 		bool   ok = cam.WorldToScreen(p, cur.x, cur.y);
 		if (ok && prevOk) { dl->AddLine(prev, cur, col, s.CircleThickness); }
@@ -162,8 +187,8 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 	if (Length(dir) > 0)
 	{
 		Vec3 side = Vec3{ dir.z, 0, -dir.x } * (s.ArrowWidth * 0.5f);
-		Vec3 base = aPlayer + dir * s.CircleRadius;
-		Vec3 tip  = aPlayer + dir * (s.CircleRadius + s.ArrowLength);
+		Vec3 base = feet + dir * s.CircleRadius;
+		Vec3 tip  = feet + dir * (s.CircleRadius + s.ArrowLength);
 		ImVec2 a, b, c;
 		if (cam.WorldToScreen(tip, a.x, a.y) &&
 		    cam.WorldToScreen(base + side, b.x, b.y) &&
@@ -175,16 +200,13 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 		if (s.ShowArrowDistance)
 		{
 			// Place the label a little beyond the tip, centred on that point.
-			Vec3 labelAt = aPlayer + dir * (s.CircleRadius + s.ArrowLength + 0.6f);
+			Vec3 labelAt = feet + dir * (s.CircleRadius + s.ArrowLength + 0.6f);
 			ImVec2 p;
 			if (cam.WorldToScreen(labelAt, p.x, p.y))
 			{
 				char buf[32];
 				std::snprintf(buf, sizeof(buf), "%.0f m", aThreat.EchoDistance);
-				ImVec2 size = ImGui::CalcTextSize(buf);
-				ImVec2 pos(p.x - size.x * 0.5f, p.y - size.y * 0.5f);
-				dl->AddText(ImVec2(pos.x + 1, pos.y + 1), IM_COL32(0, 0, 0, 200), buf);
-				dl->AddText(pos, col, buf);
+				DrawLabel(dl, s.DistanceTextSize, p, true, col, buf);
 			}
 		}
 	}
@@ -197,10 +219,7 @@ void DrawOverlay(const Settings& s, const Camera& cam, const Vec3& aPlayer,
 		{
 			char buf[32];
 			std::snprintf(buf, sizeof(buf), "%.1fs", aThreat.TimeToReach);
-			ImVec2 size = ImGui::CalcTextSize(buf);
-			ImVec2 pos(at.x - size.x * 0.5f, at.y + 24.0f);
-			dl->AddText(ImVec2(pos.x + 1, pos.y + 1), IM_COL32(0, 0, 0, 200), buf);
-			dl->AddText(pos, col, buf);
+			DrawLabel(dl, s.TimerTextSize, ImVec2(at.x, at.y + 20.0f), false, col, buf);
 		}
 	}
 }
