@@ -26,4 +26,7 @@ namespace ArcAgents
 
 	/// Most recently seen agent of that species, or 0.
 	uint16_t FindNewest(uint32_t aSpecies);
+
+	/// True if an agent of that species was reported within the last aMilliseconds.
+	bool SeenRecently(uint32_t aSpecies, uint64_t aMilliseconds);
 }

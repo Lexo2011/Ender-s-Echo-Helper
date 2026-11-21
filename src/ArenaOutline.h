@@ -70,6 +70,27 @@ namespace ArenaOutline
 	};
 	constexpr int COUNT = (int)(sizeof(POINTS) / sizeof(POINTS[0]));
 
+	/// True if (aX, aZ) is inside the arena, or within aMargin metres outside the outline (the outline
+	/// is where the Echo's centre stops; players can stand a bit closer to the walls).
+	inline bool Contains(float aX, float aZ, float aMargin)
+	{
+		bool inside = false;
+		float nearest = 1e9f;
+		for (int i = 0, j = COUNT - 1; i < COUNT; j = i++)
+		{
+			const Pt& a = POINTS[i];
+			const Pt& b = POINTS[j];
+			if ((a.Z > aZ) != (b.Z > aZ) && aX < (b.X - a.X) * (aZ - a.Z) / (b.Z - a.Z) + a.X) { inside = !inside; }
+			const float ex = b.X - a.X, ez = b.Z - a.Z;
+			float u = ((aX - a.X) * ex + (aZ - a.Z) * ez) / (ex * ex + ez * ez);
+			u = u < 0 ? 0 : (u > 1 ? 1 : u);
+			const float dx = aX - (a.X + u * ex), dz = aZ - (a.Z + u * ez);
+			const float d = std::sqrt(dx * dx + dz * dz);
+			if (d < nearest) { nearest = d; }
+		}
+		return inside || nearest < aMargin;
+	}
+
 	/// Distance along aDir (unit, flat) from aPos to the outline. False if there is no crossing ahead.
 	inline bool Exit(const Vec3& aPos, const Vec3& aDir, float& aOutT)
 	{

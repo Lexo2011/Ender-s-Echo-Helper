@@ -73,6 +73,17 @@ namespace ArcAgents
 		return Agents;
 	}
 
+	bool SeenRecently(uint32_t aSpecies, uint64_t aMilliseconds)
+	{
+		std::lock_guard<std::mutex> l(Mutex);
+		const uint64_t now = GetTickCount64();
+		for (auto& [id, a] : Agents)
+		{
+			if (a.IsNpc && a.Species == aSpecies && now - a.LastSeen < aMilliseconds) { return true; }
+		}
+		return false;
+	}
+
 	uint16_t FindNewest(uint32_t aSpecies)
 	{
 		std::lock_guard<std::mutex> l(Mutex);

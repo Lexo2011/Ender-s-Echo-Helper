@@ -62,6 +62,7 @@ LiveEcho::~LiveEcho()
 
 void LiveEcho::ResetFight()
 {
+	mEchoConfirmed = false;
 	{ std::lock_guard<std::mutex> l(mClusterMutex); mCluster.clear(); }
 	mCands.clear();
 	mStage = 0;
@@ -319,6 +320,8 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		if (!aHaveAnchor && FlatDistance(cl.Center(), aPlayer) < 12.0f) { continue; }
 		// The very first dash starts at the Echo's spawn (identical in every attempt): its line must
 		// run back through the spawn point. Rules out adds and messengers at the start.
+		// The dash that confirms the Echo (and so CM) has to be unmistakable: a big group.
+		if (!aHaveAnchor && !mReacquiring && !mEchoConfirmed && cl.Members.size() < 40) { continue; }
 		if (!aHaveAnchor && !mReacquiring)
 		{
 			const Vec3 back = Flat(Vec3{ ArenaOutline::SPAWN_X, 0, ArenaOutline::SPAWN_Z } - cl.Center());
@@ -359,6 +362,7 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		std::snprintf(b, sizeof(b), "Locked onto the Echo, %.1f s after the pull.", Now() - mFightStart);
 		APIDefs->Log(LOGL_INFO, ADDON_NAME, b);
 	}
+	mEchoConfirmed = true;
 	mStage = 3;
 	return true;
 }
@@ -416,9 +420,21 @@ void LiveEcho::WorkerLoop()
 		if (mStage == 0) { ScanArena(PlayerPos(), false); }
 		else if (mStage == 2)
 		{
+			if (ArcAgents::SeenRecently(SPECIES_ENDERS_ECHO, 60000)) { mEchoConfirmed = true; }
+			// No Echo within 30 s of the pull: normal mode (no Echo). Stay off for this fight.
+			if (!mEchoConfirmed && now - mFightStart > 30.0)
+			{
+				mStage = 4;
+				APIDefs->Log(LOGL_INFO, ADDON_NAME, "No Ender's Echo in this fight (normal mode?): off until the next pull.");
+				continue;
+			}
 			// The Echo's dash memory only exists once the dash has started (~2 s after the pull),
-			// so keep re-scanning until a dash shows up.
-			if (!FindEchoCluster(PlayerPos(), false, Vec3{}, MIN_ECHO_VALUES, false) && now - mLastScan > 1.0) { ScanArena(PlayerPos(), true); }
+			// so keep re-scanning until a dash shows up. Once the Echo is confirmed, a lost lock is
+			// re-acquired anywhere (the spawn rule is only for the very first dash).
+			mReacquiring = mEchoConfirmed.load();
+			const bool found = FindEchoCluster(PlayerPos(), false, Vec3{}, MIN_ECHO_VALUES, false);
+			mReacquiring = false;
+			if (!found && now - mLastScan > 1.0) { ScanArena(PlayerPos(), true); }
 		}
 		else if (mStage == 3)
 		{
@@ -502,7 +518,9 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 
 	if (EchoMode())
 	{
-		mInFight = MumbleLink && MumbleLink->Context.MapID == MAP_HALL_OF_CHAINS && MumbleLink->Context.IsInCombat;
+		// Only in Dhuum's arena (Hall of Chains also holds River of Souls etc.) and in combat.
+		mInFight = MumbleLink && MumbleLink->Context.MapID == MAP_HALL_OF_CHAINS && MumbleLink->Context.IsInCombat &&
+		           ArenaOutline::Contains(aPlayer.x, aPlayer.z, 8.0f);
 
 		std::vector<Cand> cluster;
 		if (mStage == 3) { std::lock_guard<std::mutex> l(mClusterMutex); cluster = mCluster; }
@@ -514,8 +532,9 @@ EchoState LiveEcho::Update(const Vec3& aPlayer, float aDt)
 			switch (mStage.load())
 			{
 				case 1:  mStatus = "Fight started, scanning memory..."; break;
-				case 2:  mStatus = "Waiting for the Echo's dash..."; break;
-				default: mStatus = "Waiting for the fight to start."; break;
+				case 2:  mStatus = mEchoConfirmed ? "Lost the Echo, looking for it..." : "Waiting for the Echo's first dash (CM only)..."; break;
+				case 4:  mStatus = "No Ender's Echo in this fight (normal mode?)."; break;
+				default: mStatus = "Waiting for a fight in Dhuum's arena."; break;
 			}
 			return s;
 		}

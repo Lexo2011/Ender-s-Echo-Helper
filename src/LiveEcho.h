@@ -65,7 +65,8 @@ private:
 
 	// Shared between render and worker thread.
 	std::atomic<bool>        mStop{ false };
-	std::atomic<bool>        mInFight{ false };    // in Hall of Chains and in combat
+	std::atomic<bool>        mInFight{ false };    // in Dhuum's arena and in combat
+	std::atomic<bool>        mEchoConfirmed{ false }; // this fight has an Ender's Echo (= CM)
 	std::atomic<int>         mStage{ 0 };          // 0 idle, 1 scanning, 2 looking for the dash, 3 tracking
 	std::atomic<bool>        mLost{ false };       // render -> worker: cluster fell apart
 	std::atomic<bool>        mFrozen{ false };     // render -> worker: Echo stands still (at a wall)
