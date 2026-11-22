@@ -18,6 +18,10 @@ namespace
 	constexpr float ECHO_SPEED_MIN = 9.95f;
 	constexpr float ECHO_SPEED_MAX = 11.0f;
 	constexpr size_t MIN_ECHO_VALUES = 8;
+	// Confirmed Echo dashes show up as ~280-380 values; other players running at swiftness speed
+	// (about the same speed) show up as thousands (player data, camera). Never the Echo above this.
+	constexpr size_t MAX_ECHO_VALUES = 1200;
+	constexpr size_t TYPICAL_ECHO_VALUES = 300;
 
 	double Now()
 	{
@@ -194,19 +198,24 @@ bool LiveEcho::WatchStanding()
 
 	std::vector<size_t> movers;
 	Vec3 dirSum;
+	const Vec3 player = PlayerPos();
+	const Vec3 camera = MumbleLink ? Vec3{ MumbleLink->CameraPosition.X, MumbleLink->CameraPosition.Y, MumbleLink->CameraPosition.Z } : Vec3{ 1e9f, 0, 1e9f };
 	for (size_t i = 0; i < mStanding.size(); i++)
 	{
 		if (!ok[i]) { continue; }
+		if (FlatDistance(p[i], player) < 3.0f || FlatDistance(p[i], camera) < 3.0f) { continue; } // you / your camera
 		const double dt = t[i] - mStandPrevT[i];
 		const float away = FlatDistance(p[i], mStandRef[i]);
 		const float v = dt > 0.02 ? FlatDistance(p[i], mStandPrev[i]) / (float)dt : 0.0f;
 		mStandPrev[i] = p[i];
 		mStandPrevT[i] = t[i];
-		if (away < 0.6f || away > 6.0f || v < 8.0f || v > 13.0f || std::fabs(p[i].y - mStandRef[i].y) > 1.5f) { continue; }
+		if (away < 0.6f || away > 6.0f || v < 9.5f || v > 11.5f || std::fabs(p[i].y - mStandRef[i].y) > 1.5f) { continue; }
 		movers.push_back(i);
 		dirSum = dirSum + Normalize(Flat(p[i] - mStandRef[i]));
 	}
 	if (movers.size() < 3) { return false; }
+	// Thousands of values moving together are a player running off, not the Echo.
+	if (movers.size() > MAX_ECHO_VALUES) { return false; }
 
 	// One direction: keep the movers that agree with the common direction.
 	const Vec3 dir = Normalize(dirSum);
@@ -311,7 +320,7 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		if (cl.Speed() < ECHO_SPEED_MIN || cl.Speed() > ECHO_SPEED_MAX) { continue; }
 		// The Echo's dash shows up as many values moving together (dozens to hundreds);
 		// messengers, adds and stray values only as a handful.
-		if (cl.Members.size() < aMinSize) { continue; }
+		if (cl.Members.size() < aMinSize || cl.Members.size() > MAX_ECHO_VALUES) { continue; }
 		// Correction: only something clearly elsewhere (not the Echo we follow, measured a moment
 		// later) and not near the player or camera.
 		if (aAwayFromAnchor && (FlatDistance(cl.Center(), aAnchor) < 12.0f || FlatDistance(cl.Center(), aPlayer) < 8.0f)) { continue; }
@@ -332,11 +341,14 @@ bool LiveEcho::FindEchoCluster(const Vec3& aPlayer, bool aHaveAnchor, const Vec3
 		ok.push_back(cl);
 	}
 	if (ok.empty()) { return false; }
-	// Biggest cluster first; speed closest to the Echo's as tie-break.
-	std::sort(ok.begin(), ok.end(), [&](const Cluster& a, const Cluster& b) {
-		if (a.Members.size() != b.Members.size()) { return a.Members.size() > b.Members.size(); }
-		return std::fabs(a.Speed() - 10.4f) < std::fabs(b.Speed() - 10.4f);
-	});
+	// Ranking. Next dash: the one starting closest to where the Echo stood (continuity beats size).
+	// Otherwise: closest to the Echo's speed and typical size (a player's group is much bigger).
+	auto score = [&](const Cluster& c) {
+		if (aHaveAnchor && !aAwayFromAnchor) { return FlatDistance(c.Origin(), aAnchor); }
+		const float sizeOff = std::fabs(std::log((float)c.Members.size() / (float)TYPICAL_ECHO_VALUES));
+		return std::fabs(c.Speed() - 10.2f) * 2.0f + sizeOff;
+	};
+	std::sort(ok.begin(), ok.end(), [&](const Cluster& a, const Cluster& b) { return score(a) < score(b); });
 
 	std::string line = aAwayFromAnchor ? "Correction, switching to:" : aHaveAnchor ? "Next dash:" : "First dash, candidates:";
 	for (size_t i = 0; i < ok.size() && i < 4; i++)
@@ -477,10 +489,11 @@ void LiveEcho::WorkerLoop()
 				if (fastUsable || mScanJob.valid() || now - mLastSlowCheck < 0.6) { continue; }
 				mLastSlowCheck = now;
 				if (FindEchoCluster(PlayerPos(), true, anchor, MIN_ECHO_VALUES, false)) { mFrozenSince = 0; mStanding.clear(); }
-				else if (Now() - mFrozenSince > 2.0)
+				else if (Now() - mFrozenSince > 3.0)
 				{
-					// The Echo never stands that long: we were following something else. Re-acquire
-					// the best Echo-speed dash anywhere (first-dash rules, no spawn learning).
+					// The Echo never stands that long: we missed its dash. Re-acquire the dash that
+					// looks most like the Echo anywhere (speed and typical size; players are excluded
+					// by their much bigger groups).
 					mReacquiring = true;
 					const bool found = FindEchoCluster(PlayerPos(), false, Vec3{}, MIN_ECHO_VALUES, false);
 					mReacquiring = false;
@@ -493,18 +506,9 @@ void LiveEcho::WorkerLoop()
 			}
 			else
 			{
+				// No mid-dash "correction": in group fights it switched to other players running at
+				// swiftness speed. The first lock (out of the spawn point) is reliable.
 				mFrozenSince = 0;
-				// During a dash: if something much bigger is dashing elsewhere at the Echo's speed,
-				// we are following the wrong thing (e.g. a messenger): switch.
-				if (now - mLastCorrection > 1.0)
-				{
-					mLastCorrection = now;
-					Vec3 at;
-					{ std::lock_guard<std::mutex> l(mClusterMutex); at = mAnchor; }
-					mReacquiring = true;
-					FindEchoCluster(PlayerPos(), true, at, std::max<size_t>(50, mLockedSize * 3), true);
-					mReacquiring = false;
-								}
 			}
 		}
 	}

@@ -337,7 +337,7 @@ extern "C" __declspec(dllexport) AddonDefinition_t* GetAddonDef()
 	AddonDef.Name             = ADDON_NAME;
 	AddonDef.Version.Major    = 1;
 	AddonDef.Version.Minor    = 0;
-	AddonDef.Version.Build    = 4;
+	AddonDef.Version.Build    = 5;
 	AddonDef.Version.Revision = 0;
 	AddonDef.Author           = "Lexo";
 	AddonDef.Description      = "Dhuum CM: shows where Ender's Echo is, its dash path, and whether you stand in it.";
